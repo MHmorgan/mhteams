@@ -207,7 +207,7 @@ pub struct Section {
     /// Use `heroImage` to make an image the centerpiece of your card. For example,
     /// a tweet that contains an image will want to put that image front and center.
     #[serde(rename = "heroImage", skip_serializing_if = "Option::is_none", serialize_with = "optional_image")]
-    pub hero_image: Option<bool>,
+    pub hero_image: Option<Image>,
 
     /// The section's `text` property is very similar to the `text` property of
     /// the card. It can be used for the same purpose.
@@ -306,11 +306,11 @@ where
     s.serialize_bool(v)
 }
 
-fn optional_image<S>(val: &Option<bool>, s: S) -> Result<S::Ok, S::Error>
+fn optional_image<S>(val: &Option<Image>, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer
 {
-    match *val {
+    match val {
         Some(v) => v.serialize(s),
         None => s.serialize_none(),
     }
