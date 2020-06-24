@@ -1,26 +1,114 @@
-//!
-//! MHteams provides an easy and idiomatic way of creating and sending messages to MS Teams webhooks.
-//! 
-//! Message card type.
+//! Idiomatic building of MS Teams messages.
 //! 
 //! Most documentation in this module are from
 //! [microsoft docs](https://docs.microsoft.com/en-us/outlook/actionable-messages/message-card-reference).
 //! 
+//! # Goal
+//! 
+//! Provide easy building of a [MS Teams](https://teams.microsoft.com/) messages,
+//! through the [`Message`] object. The [`Message`] object is serializable, 
+//! using [Serde](https://serde.rs), allowing it to be converted to JSON
+//! and sent to a Teams webhook.
+//! 
+//! # Example
+//! 
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! extern crate mhteams;
+//! extern crate reqwest;
+//! 
+//! use mhteams::{Message, Section, Image};
+//! use reqwest::blocking::Client;
+//! 
+//! let msg = Message::new()
+//!     .title("My title 😉")
+//!     .text("TL;DR: it's awesome 👍")
+//!     .sections(vec![
+//!         Section::new()
+//!             .title("The **Section**")
+//!             .activity_title("_Check this out_")
+//!             .activity_subtitle("It's awesome")
+//!             .activity_image("https://sweet.image/cute.png")
+//!             .activity_text("Lorum ipsum!")
+//!             .hero_image(Image::new("MyImage", "https://sweet.image/bigasscar.png")),
+//!         Section::new()
+//!             .title("Layin down some facts ✅")
+//!             .facts(vec![
+//!                 Fact::new("Name", "John Smith"),
+//!                 Fact::new("Language", "Rust. What else?"),
+//!             ]),
+//!     ]);
+//! 
+//! let client = Client::new();
+//! let resp = client
+//!     .post(URL)
+//!     .json(&msg)
+//!     .send()?;
+//! 
+//! # Ok(())
+//! # }
+//! ```
+//! 
+//! [`Message`]: struct.Message.html
 
 extern crate serde;
-extern crate serde_json;
 
 use serde::{Serialize, Serializer};
 
+/// Main object representing a teams message.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Message<'a> {
-    /// Required to always be set to "MessageCard"
+    // Required to always be set to "MessageCard"
     #[serde(rename = "@type")]
     typ: &'a str,
 
-    /// Required to always be set to "https://schema.org/extensions"
+    // Required to always be set to "https://schema.org/extensions"
     #[serde(rename = "@context")]
     context: &'a str,
+
+    #[serde(skip_serializing_if = "String::is_empty")]
+    summary: String,
+
+    #[serde(rename = "themeColor", skip_serializing_if = "String::is_empty")]
+    theme_color: String,
+
+    #[serde(rename = "correlationId", skip_serializing_if = "usize_is_zero")]
+    correlation_id: usize,
+
+    #[serde(rename = "expectedActors", skip_serializing_if = "Vec::is_empty")]
+    expected_actors: Vec<String>,
+
+    #[serde(skip_serializing_if = "String::is_empty")]
+    originator: String,
+
+    #[serde(rename = "hideOriginalBody", skip_serializing_if = "Option::is_none", serialize_with = "optional_bool")]
+    hide_original_body: Option<bool>,
+
+    #[serde(skip_serializing_if = "String::is_empty")]
+    title: String,
+
+    #[serde(skip_serializing_if = "String::is_empty")]
+    text: String,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sections: Vec<Section>,
+
+    // #[serde(rename = "potentialAction", skip_serializing_if = "Vec::is_empty")]
+    // potential_action: Vec<Action>,
+}
+
+impl<'a> Message<'a> {
+    /// Create a new, empty message.
+    /// 
+    /// The message @type and @context are automatically set upon
+    /// creation, since these always have the same values.
+    pub fn new() -> Message<'a> {
+        Message {
+            typ: "MessageCard",
+            context: "https://schema.org/extensions",
+            ..Default::default()
+        }
+    }
 
     /// Required if the card does not contain a `text` property, otherwise optional. 
     /// The `summary` property is typically displayed in the list view in Outlook, 
@@ -31,13 +119,17 @@ pub struct Message<'a> {
     /// **Don't** include details in the summary. For example, for a Twitter post, 
     /// a summary might simply read "New tweet from @someuser" without mentioning
     /// the content of the tweet itself.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub summary: String,
+    pub fn summary(mut self, s: impl ToString) -> Self {
+        self.summary = s.to_string();
+        self
+    }
 
     /// Specifies a custom brand color for the card. The color will be displayed
     /// in a non-obtrusive manner.
-    #[serde(rename = "themeColor", skip_serializing_if = "String::is_empty")]
-    pub theme_color: String,
+    pub fn theme_color(mut self, c: impl ToString) -> Self {
+        self.theme_color = c.to_string();
+        self
+    }
 
     /// The `correlationId` property simplifies the process of locating logs for
     /// troubleshooting issues. We recommend that when sending an actionable card,
@@ -49,8 +141,10 @@ pub struct Message<'a> {
     /// property in the card. `Action-Request-Id` is a unique UUID generated by
     /// Office 365 to help locate specific action performed by a user. Your
     /// service should log both of these values when receiving action POST requests.
-    #[serde(rename = "correlationId", skip_serializing_if = "usize_is_zero")]
-    pub correlation_id: usize,
+    pub fn correlation_id(mut self, id: usize) -> Self {
+        self.correlation_id = id;
+        self
+    }
 
     /// Optional. This contains a list of expected email addresses of the
     /// recipient for the action endpoint.
@@ -62,14 +156,24 @@ pub struct Message<'a> {
     /// `john@contoso.com` in the `sub` claim of the bearer token. By setting
     /// this field to `["john@contoso.com"]`, the `sub` claim will have the
     /// expected email address.
-    #[serde(rename = "expectedActors", skip_serializing_if = "Vec::is_empty")]
-    pub expected_actors: Vec<String>,
+    pub fn expected_actors<I>(mut self, v: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: ToString,
+    {
+        self.expected_actors = v.into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        self
+    }
 
     /// Required when sent via email, not applicable when sent via connector.
     /// For actionable email, MUST be set to the provider ID generated by the
     /// Actionable Email Developer Dashboard.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub originator: String,
+    pub fn originator(mut self, s: impl ToString) -> Self {
+        self.originator = s.to_string();
+        self
+    }
 
     /// _Only applies to cards in email messages_
     ///
@@ -91,8 +195,10 @@ pub struct Message<'a> {
     /// in the card. For example, the body of an expense report approval might
     /// describe the report in great details while the card just presents a quick
     /// summary along with approve/decline actions.
-    #[serde(rename = "hideOriginalBody", skip_serializing_if = "Option::is_none", serialize_with = "optional_bool")]
-    pub hide_original_body: Option<bool>,
+    pub fn hide_original_body(mut self, b: bool) -> Self {
+        self.hide_original_body = Some(b);
+        self
+    }
 
     /// The `title` property is meant to be rendered in a prominent way, at the
     /// very top of the card. Use it to introduce the content of the card in such
@@ -108,8 +214,10 @@ pub struct Message<'a> {
     /// **Do** mention the name of the entity being referenced in the title.
     /// 
     /// **Don't** use hyperlinks (via Markdown) in the title.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub title: String,
+    pub fn title(mut self, s: impl ToString) -> Self {
+        self.title = s.to_string();
+        self
+    }
 
     /// Required if the card does not contain a `summary` property, otherwise optional.
     /// The `text` property is meant to be displayed in a normal font below the card's
@@ -121,34 +229,72 @@ pub struct Message<'a> {
     /// 
     /// **Don't** include any call to action in the text property. Users should be
     /// able to not read it and still understand what the card is all about.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub text: String,
+    pub fn text(mut self, s: impl ToString) -> Self {
+        self.text = s.to_string();
+        self
+    }
 
     /// A collection of [`sections`] to include in the card.
     /// 
     /// [`sections`]: struct.Section.html
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<Section>,
-
-    /// A collection of [`actions`] that can be invoked on this card.
-    /// 
-    /// [`actions`]: struct.Action.html
-    #[serde(rename = "potentialAction", skip_serializing_if = "Vec::is_empty")]
-    pub potential_action: Vec<Action>,
-}
-
-impl<'a> Message<'a> {
-    pub fn new() -> Message<'a> {
-        Message {
-            typ: "MessageCard",
-            context: "https://schema.org/extensions",
-            ..Default::default()
-        }
+    pub fn sections(mut self, v: Vec<Section>) -> Self {
+        self.sections = v;
+        self
     }
+
+    // A collection of [`actions`] that can be invoked on this card.
+    // 
+    // [`actions`]: struct.Action.html
+    // pub fn potential_action(mut self, v: Vec<Action>) -> Self {
+    //     self.potential_action = v;
+    //     self
+    // }
+
 }
 
+/// A section in a message.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Section {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    title: String,
+
+    #[serde(rename = "startGroup", skip_serializing_if = "Option::is_none", serialize_with = "optional_bool")]
+    start_group: Option<bool>,
+
+    #[serde(rename = "activityImage", skip_serializing_if = "String::is_empty")]
+    activity_image: String,
+
+    #[serde(rename = "activityTitle", skip_serializing_if = "String::is_empty")]
+    activity_title: String,
+
+    #[serde(rename = "activitySubtitle", skip_serializing_if = "String::is_empty")]
+    activity_subtitle: String,
+
+    #[serde(rename = "activityText", skip_serializing_if = "String::is_empty")]
+    activity_text: String,
+
+    #[serde(rename = "heroImage", skip_serializing_if = "Option::is_none", serialize_with = "optional_image")]
+    hero_image: Option<Image>,
+
+    #[serde(skip_serializing_if = "String::is_empty")]
+    text: String,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    facts: Vec<Fact>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<Image>,
+
+    // #[serde(rename = "potentialAction", skip_serializing_if = "Vec::is_empty")]
+    // potential_action: Vec<Action>,
+}
+
+impl Section {
+    /// Create a new, empty section.
+    pub fn new() -> Self {
+        Section { ..Default::default() }
+    }
+
     /// The `title` property of a section is displayed in a font that stands out
     /// while not as prominent as the card's title. It is meant to introduce the
     /// section and summarize its content, similarly to how the card's title
@@ -159,8 +305,10 @@ pub struct Section {
     /// **Do** mention the name of the entity being referenced in the title.
     /// 
     /// **Don't** use hyperlinks (via Markdown) in the title.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub title: String,
+    pub fn title(mut self, s: impl ToString) -> Self {
+        self.title = s.to_string();
+        self
+    }
 
     /// When set to `true`, the `startGroup` property marks the start of a logical
     /// group of information. Typically, sections with `startGroup` set to `true`
@@ -169,50 +317,64 @@ pub struct Section {
     /// 
     /// **Do** use `startGroup` to separate sections that represent different objects;
     /// for example, multiple tweets in a digest.
-    #[serde(rename = "startGroup", skip_serializing_if = "Option::is_none", serialize_with = "optional_bool")]
-    pub start_group: Option<bool>,
+    pub fn start_group(mut self, b: bool) -> Self {
+        self.start_group = Some(b);
+        self
+    }
 
     /// These four properties form a logical group. `activityTitle`, `activitySubtitle`
     /// and `activityText` will be displayed alongside `activityImage`, using a
     /// layout appropriate for the form factor of the device the card is being
     /// viewed on. For instance, in Outlook on the Web, `activityTitle`,
     /// `activitySubtitle` and `activityText` are displayed on the right of `activityImage`, using a two-column layout.
-    #[serde(rename = "activityImage", skip_serializing_if = "String::is_empty")]
-    pub activity_image: String,
+    pub fn activity_image(mut self, url: impl ToString) -> Self {
+        self.activity_image = url.to_string();
+        self
+    }
 
     /// These four properties form a logical group. `activityTitle`, `activitySubtitle`
     /// and `activityText` will be displayed alongside `activityImage`, using a
     /// layout appropriate for the form factor of the device the card is being
     /// viewed on. For instance, in Outlook on the Web, `activityTitle`,
     /// `activitySubtitle` and `activityText` are displayed on the right of `activityImage`, using a two-column layout.
-    #[serde(rename = "activityTitle", skip_serializing_if = "String::is_empty")]
-    pub activity_title: String,
+    pub fn activity_title(mut self, s: impl ToString) -> Self {
+        self.activity_title = s.to_string();
+        self
+    }
 
     /// These four properties form a logical group. `activityTitle`, `activitySubtitle`
     /// and `activityText` will be displayed alongside `activityImage`, using a
     /// layout appropriate for the form factor of the device the card is being
     /// viewed on. For instance, in Outlook on the Web, `activityTitle`,
     /// `activitySubtitle` and `activityText` are displayed on the right of `activityImage`, using a two-column layout.
-    #[serde(rename = "activitySubtitle", skip_serializing_if = "String::is_empty")]
-    pub activity_subtitle: String,
+    pub fn activity_subtitle(mut self, s: impl ToString) -> Self {
+        self.activity_subtitle = s.to_string();
+        self
+    }
 
     /// These four properties form a logical group. `activityTitle`, `activitySubtitle`
     /// and `activityText` will be displayed alongside `activityImage`, using a
     /// layout appropriate for the form factor of the device the card is being
     /// viewed on. For instance, in Outlook on the Web, `activityTitle`,
     /// `activitySubtitle` and `activityText` are displayed on the right of `activityImage`, using a two-column layout.
-    #[serde(rename = "activityText", skip_serializing_if = "String::is_empty")]
-    pub activity_text: String,
+    pub fn activity_text(mut self, s: impl ToString) -> Self {
+        self.activity_text = s.to_string();
+        self
+    }
 
     /// Use `heroImage` to make an image the centerpiece of your card. For example,
     /// a tweet that contains an image will want to put that image front and center.
-    #[serde(rename = "heroImage", skip_serializing_if = "Option::is_none", serialize_with = "optional_image")]
-    pub hero_image: Option<Image>,
+    pub fn hero_image(mut self, i: Image) -> Self {
+        self.hero_image = Some(i);
+        self
+    }
 
     /// The section's `text` property is very similar to the `text` property of
     /// the card. It can be used for the same purpose.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub text: String,
+    pub fn text(mut self, s: impl ToString) -> Self {
+        self.text = s.to_string();
+        self
+    }
 
     /// Facts are a very important component of a section. They often contain
     /// the information that really matters to the user.
@@ -238,8 +400,10 @@ pub struct Section {
     /// **Don't** add a fact without a real purpose. For instance, a fact that
     /// would always have the same value across all cards is not interesting
     /// and a waste of space.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub facts: Vec<(String, String)>,
+    pub fn facts(mut self, f: Vec<Fact>) -> Self {
+        self.facts = f;
+        self
+    }
 
     /// The `images` property allows for the inclusion of a photo gallery inside
     /// a section. That photo gallery will always be displayed in a way that is
@@ -249,47 +413,67 @@ pub struct Section {
     /// through the collection if it doesn't all fit on the screen. On mobile,
     /// images might be displayed as a single thumbnail, with the user able to
     /// swipe through the collection with their finger.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub images: Vec<Image>,
+    pub fn images(mut self, i: Vec<Image>) -> Self {
+        self.images = i;
+        self
+    }
 
-    /// A collection of [`actions`] that can be invoked on this section.
-    /// 
-    /// [`actions`]: struct.Action.html
-    #[serde(rename = "potentialAction", skip_serializing_if = "Vec::is_empty")]
-    pub potential_action: Vec<Action>,
+    // A collection of [`actions`] that can be invoked on this section.
+    // 
+    // [`actions`]: struct.Action.html
+    // pub fn potential_action(mut self, a: Vec<Action>) -> Self {
+    //     self.potential_action = a;
+    //     self
+    // }
 }
 
+/// A fact (title-value pair) used in sections.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct Fact {
+    name: String,
+    value: String,
+}
+
+impl Fact {
+    pub fn new(name: impl ToString, value: impl ToString) -> Self {
+        Fact { name: name.to_string(), value: value.to_string() }
+    }
+}
+
+/// An image, referenced by a url.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Image {
-    /// The URL to the image.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub image: String,
-
-    /// A short description of the image. Typically, `title` is displayed in a tooltip as the user hovers their mouse over the image.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub title: String,
+    image: String,
+    title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub enum Action {
-    OpenUri,
-    HttpPOST,
-    ActionCard,
-    InvokeAddInCommand,
-    None,
-}
-
-impl Action {
-    pub fn is_none(&self) -> bool {
-        matches!(self, Action::None)
+impl Image {
+    /// Title: A short description of the image. Typically, `title` is displayed in a tooltip as the user hovers their mouse over the image.
+    pub fn new(title: impl ToString, url: impl ToString) -> Self {
+        Image { image: url.to_string(), title: title.to_string() }
     }
 }
 
-impl Default for Action {
-    fn default() -> Self {
-        Action::None
-    }
-}
+// #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+// pub enum Action {
+//     OpenUri,
+//     HttpPOST,
+//     ActionCard,
+//     InvokeAddInCommand,
+//     None,
+// }
+
+// impl Action {
+//     pub fn is_none(&self) -> bool {
+//         matches!(self, Action::None)
+//     }
+// }
+
+// impl Default for Action {
+//     fn default() -> Self {
+//         Action::None
+//     }
+// }
 
 fn usize_is_zero(x: &usize) -> bool {
     *x == 0
@@ -313,13 +497,5 @@ where
     match val {
         Some(v) => v.serialize(s),
         None => s.serialize_none(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
     }
 }
